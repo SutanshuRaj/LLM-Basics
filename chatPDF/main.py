@@ -1,9 +1,18 @@
 ### Reference: Alejandro AO - Multimodal RAG.
 
 import os
+import io
 import base64
+import PIL.Image
 from dotenv import load_dotenv
 from unstructured.partition.pdf import partition_pdf
+from IPython.display import Image
+
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from langchain_openai import ChatOpenAI
 
 
 load_dotenv()
@@ -21,6 +30,15 @@ def imageBase64(images):
 	return image_b64
 
 
+def displayBase64(codeBase64):
+	img_object = base64.b64decode(codeBase64)
+	img = Image(data=img_object)
+	img_data = PIL.Image.open(io.BytesIO(img.data))
+	img_data.show()
+
+
+
+### Extract the Data ###
 
 # LangChain has Loader for Unstructured.
 output_path = "./docs/"
@@ -57,5 +75,62 @@ for chunk in chunks:
 		text.append(chunk)
 
 image = imageBase64(chunks)
+
+if False:
+	displayBase64(image[0])
+
+
+### Summarize the Data ###
+
+# Vectorize the Data, to be used in the Retrieval Process.
+prompt_text = """
+You are an assistant tasked with summarizing tables and text.
+Give a concise summary of the table or text.
+
+Respond only with the summary, no additionnal comments.
+Do not start your message by saying "Here is a summary."
+Just give the summary as it is. 
+
+Table or text chunk: {element}
+"""
+
+prompt = ChatPromptTemplate.from_template(prompt_text)
+
+# Chain of Thought.
+model = ChatGroq(temperature=0.5, model="llama-3.1-8b-instant")
+summaryChain = {"element": lambda x: x} | prompt | model | StrOutputParser()
+
+
+summarizeText = summaryChain.batch(text, {"max_concurrency": 3})
+
+# Visualize: table[0].to_dict()
+tableHTML = [tab.metadata.text_as_html for tab in table]
+summarizeTable = summaryChain.batch(tableHTML, {"max_concurrency": 3})
+
+# Quick Sanity Check.
+print(summarizeText[0])
+
+prompt_template = """Describe the image in detail. For context,
+                  the image is part of a research paper explaining the transformers architecture. 
+                  Be specific about graphs, such as bar plots."""
+
+messages = [
+	(
+		"user",
+		[
+			{"type": "text", "text": prompt_template},
+			{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,{image}"}},
+		],
+	)
+]
+
+prompt = ChatPromptTemplate.from_messages(messages)
+chain = prompt | ChatOpenAI(model='gpt-4o-mini') | StrOutputParser()
+summarizeImage = chain.batch(image)
+
+# Quick Sanity Check.
+print(summarizeImage[1])
+
+
 
 
