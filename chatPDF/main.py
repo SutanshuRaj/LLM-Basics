@@ -128,8 +128,8 @@ prompt = ChatPromptTemplate.from_messages(messages)
 chain = prompt | ChatOpenAI(model='gpt-4o-mini') | StrOutputParser()
 summarizeImage = chain.batch(image)
 
-# Quick Sanity Check.
-print(summarizeImage[1])
+if False:
+	print(summarizeImage[1])
 
 
 
