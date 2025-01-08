@@ -2,8 +2,10 @@
 
 import os
 import io
+import uuid
 import base64
 import PIL.Image
+
 from dotenv import load_dotenv
 from unstructured.partition.pdf import partition_pdf
 from IPython.display import Image
@@ -13,6 +15,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from langchain_openai import ChatOpenAI
+
+from langchain_community.vectorstores import Chroma
+from langchain.storage import InMemoryStore
+from langchain.schema.document import Document
+# from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from langchain.retrievers.multi_vector import MultiVectorRetriever
 
 
 load_dotenv()
@@ -64,20 +73,20 @@ print(set([str(type(ele)) for ele in chunks]))
 # Each CompositeElement containes related elements, to use together in a RAG pipeline.
 # print(chunks[0].metadata.orig_elements)
 
-table = []
-text = []
+tables = []
+texts = []
 
 for chunk in chunks:
 	if 'Table' in str(type(chunk)):
-		table.append(chunk)
+		tables.append(chunk)
 
 	if 'CompositeElement' in str(type(chunk)):
-		text.append(chunk)
+		texts.append(chunk)
 
-image = imageBase64(chunks)
+images = imageBase64(chunks)
 
 if False:
-	displayBase64(image[0])
+	displayBase64(images[0])
 
 
 ### Summarize the Data ###
@@ -101,10 +110,10 @@ model = ChatGroq(temperature=0.5, model="llama-3.1-8b-instant")
 summaryChain = {"element": lambda x: x} | prompt | model | StrOutputParser()
 
 
-summarizeText = summaryChain.batch(text, {"max_concurrency": 3})
+summarizeText = summaryChain.batch(texts, {"max_concurrency": 3})
 
 # Visualize: table[0].to_dict()
-tableHTML = [tab.metadata.text_as_html for tab in table]
+tableHTML = [table.metadata.text_as_html for table in tables]
 summarizeTable = summaryChain.batch(tableHTML, {"max_concurrency": 3})
 
 # Quick Sanity Check.
@@ -126,11 +135,56 @@ messages = [
 
 prompt = ChatPromptTemplate.from_messages(messages)
 chain = prompt | ChatOpenAI(model='gpt-4o-mini') | StrOutputParser()
-summarizeImage = chain.batch(image)
+summarizeImage = chain.batch(images)
 
 if False:
 	print(summarizeImage[1])
 
 
+### Load Data and Summary to the VectorDB ###
+
+# Index the Chunks.
+vectorStore = Chroma(collection_name="multi_modal_rag", embedding_function=OpenAIEmbeddings())
+
+# Storage Layer of Parent Document.
+store = InMemoryStore()
+id_key = "doc_id"
+
+# Build the Retriever.
+retriever = MultiVectorRetriever(
+    vectorstore=vectorStore,
+    docstore=store,
+    id_key=id_key)
 
 
+# Add the Texts.
+doc_id = [str(uuid.uuid4()) for _ in texts]
+
+summary_Text = [
+	Document(page_content=summary, metadata={id_key: doc_id[i]}) for i, summary in enumerate(summarizeText) ]
+retriever.vectorstore.add_documents(summary_Text)
+retriever.docstore.mset(list(zip(doc_id, texts)))
+
+
+# Add the Tables.
+
+# table_id = [str(uuid.uuid4()) for _ in tables]
+
+# summary_Table = [
+# 	Document(page_content=summary, metadata={id_key: table_id[i]}) for i, summary in enumerate(summarizeTable) ]
+# retriever.vectorstore.add_documents(summary_Table)
+# retriever.docstore.mset(list(zip(table_id, tables)))
+
+
+# Add the Images.
+# img_id = [str(uuid.uuid4()) for _ in images]
+
+# summary_Image = [
+# 	Document(page_content=summary, metadata={id_key: img_id[i]}) for i, summary in enumerate(summarizeImage) ]
+# retriever.vectorstore.add_documents(summary_Image)
+# retriever.docstore.mset(list(zip(doc_id, images)))
+
+# Quick Sanity Check. Test Retrieval.
+question = retriever.invoke("Who are the authors of the Attention paper?")
+for q in question:
+    print(str(q) + "\n\n")
